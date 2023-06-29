@@ -271,22 +271,267 @@ AirSim开放了很多API接口，用于读取数据、控制车辆、控制天�
              self.carcontr.throttle=1
              self.client.setCarControls(self.carcontr)
 
-    
+
+
+
+
+    # responses=client.simGetImages([
+    #     airsim.ImageRequest(0,airsim.ImageType.Scene),
+    #     # 前视深度信息
+    #     airsim.ImageRequest(0,airsim.ImageType.DepthVis),
+    #     # bottom深度信息
+    #     airsim.ImageRequest(3,airsim.ImageType.DepthVis)
+    # ])
+    if __name__ == "__main__":
+     '测试飞行'
+     game_state = FlyingState()
+     for i in range(0,1):
+         game_state.rand_action()
 
 现在已经得到了小车的状态，有了小车的状态后就可以开始利用深度学习的网络来进行学习，达到视觉避障的目的。
 
-# responses=client.simGetImages([
-#     airsim.ImageRequest(0,airsim.ImageType.Scene),
-#     # 前视深度信息
-#     airsim.ImageRequest(0,airsim.ImageType.DepthVis),
-#     # bottom深度信息
-#     airsim.ImageRequest(3,airsim.ImageType.DepthVis)
-# ])
-if __name__ == "__main__":
-    '测试飞行'
-    game_state = FlyingState()
-    for i in range(0,1):
-        game_state.rand_action()
+## 第三章  基于深度学习的视觉避障
+**3.1  Tensorflow的介绍**   
+
+TensorFlow是一个端到端的开源机器学习平台，它提供了灵活的工具、库和社区资源，让任何人都可以轻松地构建和部署机器学习应用。    
+
+TensorFlow的核心是一个用于表示计算的数据流图，其中每个节点代表一个数学运算，每条边代表一个多维数组（张量）。这种表示方式可以让你在不同的硬件平台上高效地执行复杂的计算，包括CPU、GPU、TPU等。   
+
+TensorFlow支持多种编程语言，比如Python、C++、Java等，但是最常用的是Python。TensorFlow提供了多个高级API，比如Keras、Estimator等，让你可以用简洁的代码构建和训练神经网络。    
+
+TensorFlow还有一个丰富的生态系统，包括各种工具和库，比如：  
+
+1）TensorFlow Hub：一个提供预训练模型和数据集的平台，让你可以重用别人的经验和知识。 
+
+2）TensorFlow Lite：一个轻量级的框架，让你可以在移动设备或嵌入式设备上运行机器学习模型。    
+
+3）TensorFlow.js：一个JavaScript库，让你可以在浏览器或Node.js上运行机器学习模型。   
+
+4）TensorFlow Extended：一个端到端的平台，让你可以在生产环境中部署和管理机器学习管道。  
+
+其他可参考官方网站：    
+
+ [tensorflow.google.cn](https://tensorflow.google.cn/)
+
+
+**3.1.1  训练网络搭建** 
+
+本质上我们使用到的深度学习是用来对图片进行分类，有两大类，一大类是有障碍物遮挡、一大类是没有障碍物遮挡。然后利用网络进行判断，如果摄像头里面拍到的图像是有遮挡，那么改变当前轨迹例如刹车和转弯。    
+
+    import tensorflow as tf
+    from keras import Model
+    from keras.layers import   Dense, Activation, Conv2D, MaxPool2D, AveragePooling2D, Flatten, BatchNormalization, LayerNormalization,AveragePooling1D
+    import numpy as np
+    import os 
+    '简单的resnet模型, 用于监督学习'
+    class Actor(Model): 
+     # 评估网络,输出动作
+     def __init__(self):
+         super().__init__() 
+          # resnet
+          self.c_1_1 = Conv2D(filters=64, kernel_size=(5, 5),strides=2, padding='valid', 
+                              kernel_initializer='he_uniform',)  # 卷积层
+          self.b_1 = BatchNormalization()
+          self.a_1_1 = Activation('elu')  # 激活层
+          self.p_1 = MaxPool2D(pool_size=(2, 2), strides=2, padding='valid')  # 池化层
+          # c2
+          self.c_2_1 = Conv2D(filters=64, kernel_size=(3, 3), padding='same',
+                             kernel_initializer ='he_uniform',)  # 卷积层
+          self.b_2_1 = BatchNormalization()
+          self.a_2_1 = Activation('elu')  # 激活层
+           self.c_2_2 = Conv2D(filters=64, kernel_size=(3, 3), padding='same',
+                              kernel_initializer='he_uniform',)  # 卷积层
+           self.b_2_2 = BatchNormalization()
+           self.a_2_2 = Activation('elu')  # 激活层
+          # linerchange
+          self.l_1 = Conv2D(filters=128, kernel_size=1, padding='same',strides=2,
+                              kernel_initializer ='he_uniform',)  # 卷积层)
+          # linerchange
+          self.l_2 = Conv2D(filters=256, kernel_size=1, padding='same',strides=2,
+                             kernel_initializer ='he_uniform',)  # 卷积层)
+          # c4
+          self.c_4_1 = Conv2D(filters=128, kernel_size=(3, 3), padding='same', 
+                             kernel_initializer='he_uniform',)  # 卷积层
+           self.b_4_1 = BatchNormalization()
+           self.a_4_1 = Activation('elu')  # 激活层
+           self.c_4_2 = Conv2D(filters=128, kernel_size=(3, 3), padding='same',
+                              kernel_initializer ='he_uniform',)  # 卷积层
+           self.b_4_2 = BatchNormalization()
+           self.a_4_2 = Activation('elu')  # 激活层
+
+          self.p_2 = AveragePooling2D(pool_size=(2, 2), strides=2, padding='valid')  # 池化层
+          self.flatten = Flatten()
+          self.f1 = Dense(256, activation='elu',
+                            kernel_initializer='he_uniform')
+          self.f1_2 = Dense(32, activation='elu',
+                            kernel_initializer='he_uniform')
+         self.f2 = Dense(1, activation=None,
+                             kernel_initializer='he_uniform') # 输出层
+          # self.f3 = Dense(1, activation='tanh',
+          #                    kernel_initializer=tf.keras.initializers.TruncatedNormal(mean=0.0, stddev=0.1, seed=42),
+                          #    bias_initializer = 'he_uniform')
+          # 加载网络
+         self.checkpoint_save_path = "./model_sup/car_actor1"
+         if os.path.exists(self.checkpoint_save_path + '.index'):
+             print('-------------load the model-----------------')
+             self.load_weights(self.checkpoint_save_path)
+         else:
+             print('-------------train new model-----------------')
+
+      def call(self,x):
+         x = self.c_1_1(x)
+          x = self.b_1(x)
+         x = self.a_1_1(x)
+         x1 = self.p_1(x)
+          x = self.c_2_1(x1)
+          x = self.b_2_1(x)
+          x = self.a_2_1(x)
+          x = self.c_2_2(x)
+          x = self.b_2_2(x+x1)
+          x1 = self.a_2_2(x)
+           x1 = self.l_1(x1)
+           x = self.c_4_1(x1)
+           x = self.b_4_1(x)
+           x = self.a_4_1(x)
+           x = self.c_4_2(x)
+           x = self.b_4_2(x+x1)
+         x1 = self.a_4_2(x)
+            x1 = self.l_2(x1)
+            x = self.p_2(x1)
+           x = self.flatten(x)
+          x = self.f1(x)
+          x = self.f1_2(x)
+           y = self.f2(x) # 要考虑输入输出的维度
+           y = tf.squeeze(y,1)
+          return y      
+       def save_wei(self):
+          # 保存网络
+           self.save(self.checkpoint_save_path)
+
+
+**3.1.2  训练主程序** 
+
+主程序就利用前面已经构建好的网络模型和连接AirSim的程序，来进行模型的训练。
+
+    import tensorflow as tf
+    from keras import losses
+    import keras.optimizers as optimizers
+    import random
+    import numpy as np
+    from collections import deque
+    import os 
+    import datetime
+    from imgnet_sup import Actor
+    from get_state_car_sup import FlyingState
+
+    os.environ['CUDA_VISIBLE_DEVICES']='0'
+    '训练算法文件'
+
+    # 常量
+    REPLAY_MEMORY = 3200 # 观测存储器D的容量
+    BATCH = 64 # 训练batch大小
+    OBSERVE = BATCH+5 # 训练前观察积累的轮数
+
+    def trainNet(istrain):
+     # 创建网络
+      actor_val=Actor()
+     # tf.random.set_seed(42)
+
+      # 将每一轮的观测存在D中，之后训练从D中随机抽取batch个数据训练，以打破时间连续导致的相关性，保证神经网络训练所需的随机性。
+     D = deque()  # Memory
+     t=0
+     temp_t=0
+     s = env.linkToAirsim() # reset
+     s = tf.convert_to_tensor(s,tf.float32)
+     optimizer_ac = tf.keras.optimizers.Adam(learning_rate = 1e-5)
+
+       eps=0
+     while eps < 1501:
+         action = actor_val(tf.expand_dims(s, 0)) 
+         s_t,r,d = env.frame_step(action)
+         s_t = tf.convert_to_tensor(s_t,tf.float32)
+         temp_t+=1
+         D.append((s,r))
+         if len(D) > REPLAY_MEMORY:
+             D.popleft()
+         s=s_t
+         t+=1
+
+
+    #============================ 训练网络 ===========================================
+          # 观测一定轮数后开始训练
+         if  t > OBSERVE and istrain and temp_t > 20:
+             # 随机抽取minibatch个数据训练
+             eps+=1
+             for i in range(60):
+                    # print("==================start train====================t=",t)
+
+                    minibatch = random.sample(D, BATCH)
+
+                 # 获得batch中的每一个变量
+                 b_s = tf.convert_to_tensor([d[0] for d in minibatch])
+                 b_r = tf.convert_to_tensor([d[1] for d in minibatch],dtype=tf.float32)
+
+                 # 训练Critic
+                  with tf.GradientTape() as tape:
+                     loss1 = losses.MSE(b_r,actor_val(b_s))                
+                     # print("loss1 = %f " % loss1)
+                 gradients = tape.gradient(loss1, actor_val.trainable_variables)
+                 optimizer_ac.apply_gradients(zip(gradients, actor_val.trainable_variables))
+
+                   if i%4 == 3:
+                   # tensorboard
+                        print("ep=",eps,"loss1 = %f " % loss1)
+
+              temp_t=0
+
+           if d == True:
+            
+             s=env.linkToAirsim() # 完成后reset
+              s = tf.convert_to_tensor(s,tf.float32)
+                ep_reward=0
+
+    def test():
+       t=0
+     actor_val=Actor('val')
+     s = env.linkToAirsim()
+     ep_reward = 0
+     while t < 2000:
+
+         action=actor_val(tf.expand_dims(tf.constant(s, dtype=tf.float32), 0)) # 注意单个动作要expand dim
+            s_t,r,d= env.frame_step(action.numpy()[0])
+         ep_reward+=r
+         s=s_t
+         t+=1
+
+         if d==True:
+            break
+
+    if __name__ == "__main__":
+      env = FlyingState()
+     trainNet(True)
+
+## 第四章  总结
+**4.1  方案总结**   
+
+**4.1.1  方案总结** 
+
+在本次实验中，我选择下载了BLOCKS的场景来进行训练，在该场景中，有比较简单的障碍物。
+我们主要通过利用深度学习中的RESNET网络来对车上的光学摄像头接收到的信息进行图像的分类，依据分类的结果对小车采取不同的策略。例如如果前视摄像头中发现了有障碍物即block遮挡时，小车就以0.323的油门和-0.774的转弯进行障碍物避障，这是由于在原始的BLOCKS中，以该转弯率和油门则会原地打转，不会撞上任何障碍物。如果没有则直行。    
+
+
+**4.1.2  存在问题**
+
+最主要的问题是算法的鲁棒性不够好，拓展性不够好，在小车上进行算法实测的时候发现小车对于教室场景的识别不佳。推测问题在于场景的真实性不够，所以我加入了真实的数据集来进行训练，以小车真实自带的摄像头拍摄的图片来进行训练，加入该数据集后的训练训练了50轮，得到的结果与之前相比有一定的提高。        
+
+**4.2  下一步工作** 
+
+可以利用小车收集更多的数据集来进行训练。
+
+
+
+
+
 
 
 
